@@ -1,5 +1,5 @@
 <?xml version='1.0'?>
-<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.0'>
+<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.1'>
   <description>Determines differentially methylated regions and positions from Infinium Methylation Assays</description>
   <macros>
     <import>macros.xml</import>
@@ -144,7 +144,7 @@
         <param type='data' name='external_grset' format='rdata' label='Pre-built GenomicRatioSet (.rda)' help='Must contain an object named GRSet or GRSet.common - e.g. the Stage 4 output of the cross-array harmonisation pipeline (Noob -&gt; betaqn -&gt; ComBat -&gt; common-probe restriction).'/>
       </when>
     </conditional>
-    <param type='data' name='phenotype_table' format='tabular' label='Phenotype Table' help='Phenotype Table must include the following information: sampleID, phenotype and paird or unpaired samples column.'/>
+    <param type='data' name='phenotype_table' format='tabular' label='Phenotype Table' help='Table of compared samples and their characteristics, may be categorical (e.g. cancer vs. normal) or continuous (e.g. blood pressure). Must include the following information: sampleID, phenotype and paird or unpaired samples column.'/>
     <param name='maxgap_size' type='integer' value='250' label='maxGap Size' help='If cluster is not provided this maximum location gap will be used to define cluster.'/>
     <param name='cutoff_size' type='float' value='0.1' label='Cutoff Size' help='A numeric value. Values of the estimate of the genomic profile above the cutoff or below the negative of the cutoff will be used as candidate regions. It is possible to give two separate values (upper and lower bounds). If one value is given, the lower bound is minus the value.'/>
     <param name='number_of_resamples' type='integer' value='0' label='Number of Resamples' help='An integer denoting the number of resamples to use when computing null distributions. This defaults to 0. If permutations is supplied that defines the number of permutations/bootstraps and B is ignored.'/>
@@ -152,7 +152,6 @@
       <option value='permutation' selected='True'>permutation</option>
       <option value='bootstrap'>bootstrap</option>
     </param>
-    <param type='data' name='phenotype_table' format='tabular' label='Phenotype Table' help='Table of compared samples and their characteristics, may be categorical (e.g. cancer vs. normal) or continuous (e.g. blood pressure).'/>
     <param name='phenotype' type='select' label='Phenotype Type'>
       <option value='categorical'>categorical</option>
       <option value='continuous'>continuous</option>

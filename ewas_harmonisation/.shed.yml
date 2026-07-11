@@ -13,7 +13,15 @@ type: unrestricted
 categories:
   - Epigenetics
   - Transcriptomics
-suite: true
+suite:
+  name: suite_ewas_harmonisation
+  description: Cross-array (450K/EPIC) harmonisation pipeline extending the EWAS-Galaxy suite
+  long_description: >
+    Four chained Galaxy tools implementing within-array background correction (Noob),
+    cross-platform quantile normalisation (betaqn), batch correction (ComBat), and
+    restriction to common 450K/EPIC probes. Designed to sit alongside the existing
+    EWAS-Galaxy minfi_* tools (kpbioteam/ewastools), producing a harmonised
+    GenomicRatioSet suitable as input to the existing DMR/DMP hunting steps.
 repositories:
   cpg_harmonisation_stage1_noob:
     include:
