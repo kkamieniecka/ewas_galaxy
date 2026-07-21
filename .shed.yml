@@ -5,3 +5,5 @@ homepage_url: https://bioconductor.org/packages/release/bioc/html/minfi.html
 name: ewastools
 owner: kpbioteam
 remote_repository_url: https://github.com/kpbioteam/ewas_galaxy
+exclude:
+  - ewas_harmonisation/**
