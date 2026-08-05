@@ -1,5 +1,5 @@
 <?xml version='1.0'?>
-<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.1'>
+<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.3'>
   <description>Determines differentially methylated regions and positions from Infinium Methylation Assays</description>
   <macros>
     <import>macros.xml</import>
@@ -120,6 +120,12 @@
         dmp[,'names'] <- rownames(dmp)
         data <- merge(dmp, tab, by='names',sort = TRUE)
         data <- data[,c(6,7,8,1,4,5)]
+        ## Round pval/qval to 6 significant figures: raw double precision varies
+        ## in the far decimal places across R/Bioconductor point releases (e.g.
+        ## different BLAS backends), which made byte-exact test comparisons
+        ## fail despite identical probe ordering and effectively identical values.
+        data[,5] <- signif(data[,5], 6)
+        data[,6] <- signif(data[,6], 6)
         write.table(data, file= '$dmp', quote = FALSE,col.names = TRUE, row.names = FALSE, sep = '\t')
 
 	]]></configfile>
@@ -207,7 +213,11 @@
       <param name='variance_shrinkage' value='FALSE'/>
       <param name='ucsc_genome' value='ucsc.gtf'/>
       <output name='qctab' file='Quality_Control_Report_Skipped.txt'/>
-      <output name='qcpng' file='Quality_Control_Plot_Skipped.png' compare='sim_size'/>
+      <!-- delta bumped from the 10000-byte default: this near-blank placeholder plot is
+           small enough that indexed-palette vs. RGBA-truecolor PNG encoding (which varies
+           by R graphics-device/libpng build across environments, not by plot content)
+           swings the file size by >10000 bytes even though dimensions/content match. -->
+      <output name='qcpng' file='Quality_Control_Plot_Skipped.png' compare='sim_size' delta='16000'/>
       <output name='dmr' file='Differentially_Methylated_Regions_Harmonised.bed'/>
       <output name='dmp' file='Differentially_Methylated_Positions_Harmonised.bed'/>
     </test>
