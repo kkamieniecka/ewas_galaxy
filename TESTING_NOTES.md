@@ -57,3 +57,81 @@ This downloads each package tarball from `bioconductor.org` and runs `R CMD INST
 - `wsl.exe -d Ubuntu -- bash -lc "..."` calls with `/mnt/c/...` path arguments get mangled by Git Bash's MSYS path auto-conversion unless prefixed with `MSYS_NO_PATHCONV=1`.
 - Inline shell variable assignment + read within a single `bash -lc "VAR=x; echo $VAR"` string is unreliable through this particular Bash-tool → `wsl.exe` invocation path (assignment silently doesn't persist) — write a real script file and execute that instead, or use fully literal values.
 - The WSL2 VM's `/tmp` is not guaranteed to survive a VM restart (observed during a low-disk-space incident) — use `--no_cleanup` and point `--job_output_files`/`--test_output_json` at a path on the Windows-mounted filesystem if you need results to survive an interruption.
+
+# Local `planemo test` findings (2026-08-05/08), Apple Silicon Mac
+
+Notes from getting `minfi_analysis.xml` and the `ewas_harmonisation` stage tools running locally on a 16GB M2 MacBook Air (macOS 15.6, arm64). Neither of the two WSL2 issues above reproduced here (this machine already has enough RAM, and — as it turns out — a pre-existing host R install masked the manifest-loading issue entirely; see below). But getting genuinely *isolated* test execution working surfaced a new chain of issues, each hiding the next. Kept here so it isn't re-discovered from scratch.
+
+## 1. Docker/mulled container resolution silently fails, falls back to unmanaged execution
+
+**Symptom:** `planemo test --biocontainers` reports tests as passing (or failing on ordinary script bugs), but the job isn't actually running inside the container it built. Confirmed by adding a diagnostic `cat(.libPaths(), ...)` to a tool's R script: it printed `/Library/Frameworks/R.framework/...` — a macOS-only path that can never exist inside a Linux container.
+
+**Root cause:** every container resolver Galaxy tries (`ExplicitContainerResolver`, both `CachedMulledDockerContainerResolver` variants, `MulledDockerContainerResolver`, `BuildDockerContainerResolver`) logs `found description [None]` for tools with large/bespoke multi-package requirement sets, even after `BuildDockerContainerResolver` has actually built a working image (confirmed: running that exact image by hand with the tool's exact generated R script works fine). The resolver's own post-build verification is failing/timing out on this Docker/OrbStack arm64 setup. Since `--biocontainers` also deliberately empties `resolvers_conf.xml` (to force container-only resolution — see planemo's `galaxy/config.py`), Galaxy is left with *no* dependency management path at all when container resolution also fails, and silently runs the raw command against whatever's on `PATH` instead of hard-failing.
+
+**Implication:** don't trust a "biocontainers" test pass on this machine without independently confirming the job actually ran in a container (e.g. a `.libPaths()`/`sessionInfo()` diagnostic, or checking `docker ps -a` timestamps against the job's runtime). This machine happened to have a fairly complete pre-existing Bioconductor/minfi R install (unrelated prior work), which made the silent fallback look like a pass for some tools and only surfaced as a real failure where the host install had a gap (missing `nleqslv`, breaking `wateRmelon::betaqn`).
+
+**Not fixed** — worked around by switching to `--conda_dependency_resolution` instead of chasing this further.
+
+## 2. Conda dependency resolution on osx-arm64: Bioconductor packages aren't built for it
+
+**Symptom:** `conda create` for `bioconductor-minfi` (or anything depending on it) fails immediately:
+```
+LibMambaUnsatisfiableError: Encountered problems while solving:
+  - nothing provides bioconductor-biocparallel >=1.36.0,<1.37.0 needed by bioconductor-minfi-1.48.0-r43hdfd78af_0
+```
+
+**Root cause:** bioconda mostly publishes `linux-64` and `osx-64` (Intel) builds for compiled Bioconductor packages; native `osx-arm64` builds are missing for much of this dependency graph.
+
+**Fix:** force the Intel subdir and rely on Rosetta 2 emulation — set globally in `~/.condarc`:
+```yaml
+subdir: osx-64
+```
+(equivalent to `CONDA_SUBDIR=osx-64`, but see #3 below for why the env-var form matters more than expected). Confirmed: the exact same `conda create` command that failed on `osx-arm64` resolves and installs cleanly under `osx-64`.
+
+## 3. Conda 26.7.0 bug: `validate_subdir_config()` crashes when no env is active
+
+**Symptom:** with `subdir: osx-64` set via `.condarc` (a global/file source, not env var or CLI flag), `conda create` invoked with no environment currently active (exactly how Galaxy invokes it as a subprocess) crashes instead of installing:
+```
+TypeError: expected str, bytes or os.PathLike object, not NoneType
+  File ".../conda/cli/common.py", line 226, in validate_subdir_config
+    elif not paths_equal(context.active_prefix, context.root_prefix):
+  File ".../conda/common/path/__init__.py", line 119, in paths_equal
+    return abspath(path1) == abspath(path2)
+```
+
+**Root cause:** `context.active_prefix` is `None` when no env is active; `validate_subdir_config`'s file-sourced-config branch calls `paths_equal(None, context.root_prefix)` without a None-guard, even though the function's own docstring says a subdir override from "a global file" should be fine as long as it's "a base env" (which "no active env" trivially is).
+
+**Fix applied (patches the local conda install, not a repo file):** added a None-guard in `<conda_prefix>/lib/python3.13/site-packages/conda/cli/common.py`, in `validate_subdir_config`, right before the `paths_equal(context.active_prefix, context.root_prefix)` branch:
+```python
+elif context.active_prefix is None:
+    pass  # no active env (e.g. invoked from a subprocess with no env
+    # activated) is equivalent to using base -- this is ok
+elif not paths_equal(context.active_prefix, context.root_prefix):
+```
+Setting `CONDA_PREFIX`/`CONDA_DEFAULT_ENV` env vars before invoking `conda create` also avoids the crash (env-var-sourced subdir config takes a different, safe branch) but did **not** reliably propagate through Galaxy's subprocess invocation in practice — the source patch is the durable fix. Re-apply after any Miniforge/conda upgrade, since it edits an installed package file directly.
+
+## 4. Failed/interrupted conda env-creation attempts leave a corrupted package cache
+
+**Symptom:** even after fixing #2/#3, a freshly-"succeeding" `conda create` (using package caches built up across many earlier failed automatic retry attempts) produced an env where required annotation packages were silently absent, and a compiled package (`preprocessCore`, a `minfi` dependency) failed to `dyn.load` due to a missing shared library — see #5.
+
+**Fix:** `conda clean -a -y` to clear the tarball/package cache, then rebuild the env from scratch. Galaxy/planemo's automatic dependency resolution retries a failing env creation many times (with slightly different arguments each time — pinned versions, then `=*`, then per-package) before giving up; each attempt can leave partially-extracted packages in the shared cache that get silently reused (skipping proper install steps) by later attempts, including manual ones.
+
+## 5. Old pinned dependency set (`r-base=3.6.2` era) needs an explicit OpenBLAS pin
+
+**Symptom:** after a clean rebuild, loading `minfi` still fails:
+```
+Error: package or namespace load failed for 'minfi' in dyn.load(...):
+ unable to load shared object '.../lib/R/library/preprocessCore/libs/preprocessCore.dylib':
+  dlopen(...): Library not loaded: @rpath/libopenblasp-r0.3.7.dylib
+  Reason: tried: '.../lib/libopenblasp-r0.3.7.dylib' (no such file) ...
+```
+
+**Root cause:** `minfi_analysis.xml`'s pinned `bioconductor-preprocesscore` build (implied by the old `r-base=3.6.2`/`bioconductor-minfi=1.32.0` pins in `macros.xml`, not pinned itself) was compiled against a specific OpenBLAS ABI whose `.dylib` embeds the exact version in its install name (`libopenblasp-r0.3.7.dylib`). The solver picked a newer, unpinned `libopenblas` (0.3.12) instead, which ships under a different filename — the dynamic loader can't find the one `preprocessCore` actually links against.
+
+**Fix (diagnostic environment only, not a tool-code change):** explicitly add `libopenblas=0.3.7` to the `conda create` command for this tool's env (confirmed available via `conda search -c conda-forge "libopenblas=0.3.7"`). After this, `library(minfi)` plus both annotation packages load cleanly and both of `minfi_analysis.xml`'s tests pass end-to-end.
+
+**Implication for CI:** this is very likely osx-64/Rosetta-specific — Travis CI runs on Linux, where this old dependency set has presumably been resolving fine for years. Not expected to reproduce there.
+
+## Net result
+
+With all five of the above addressed, both `minfi_analysis.xml` tests and `ewas_harmonisation`'s Stage 1 and Stage 2 tests pass under genuinely isolated `--conda_dependency_resolution` execution (confirmed via `.libPaths()` pointing at the conda env, not host R). The `dmp`/`qcpng`/`qctab` float-precision and PNG-encoding tolerances added to the tool XMLs (see git history) proved robust across this — and the earlier, differently-drifted — environment, needing no further adjustment.

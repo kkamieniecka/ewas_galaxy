@@ -45,6 +45,14 @@
     <data name='pcapng' format='png' label='Stage 2 PCA Plot'/>
     <data name='summarytab' format='tabular' label='Stage 2 PCA Summary'/>
   </outputs>
+  <tests>
+    <test>
+      <param name='grset_in' value='Stage1_GRSet.rda' ftype='rdata'/>
+      <output name='grset_out' file='Stage2_GRSet.rda' compare='sim_size'/>
+      <output name='pcapng' file='Stage2_PCA_Plot.png' compare='sim_size' delta='16000'/>
+      <output name='summarytab' file='Stage2_PCA_Summary.txt'/>
+    </test>
+  </tests>
   <help><![CDATA[
 
 .. class:: infomark

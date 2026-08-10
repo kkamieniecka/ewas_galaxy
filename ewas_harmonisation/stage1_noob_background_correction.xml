@@ -27,6 +27,12 @@
         MSet.noob <- preprocessNoob(RGSet, dyeMethod = 'single') #within-array background correction + single dye-bias adjustment
 
         qc <- getQC(MSet.noob)
+        ## Round to 6 significant figures: raw double precision in mMed/uMed varies
+        ## in the far decimal places across R/Bioconductor point releases (e.g.
+        ## different BLAS backends), which made byte-exact test comparisons fail
+        ## despite effectively identical values.
+        qc\$mMed <- signif(qc\$mMed, 6)
+        qc\$uMed <- signif(qc\$uMed, 6)
         write.table(qc, '$qctab')
         png('$qcpng')
         plotQC(qc)
@@ -47,6 +53,15 @@
     <data name='qctab' format='txt' label='Stage 1 Quality Control Report'/>
     <data name='qcpng' format='png' label='Stage 1 Quality Control Plot'/>
   </outputs>
+  <tests>
+    <test>
+      <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat'/>
+      <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat'/>
+      <output name='grset_out' file='Stage1_GRSet.rda' compare='sim_size'/>
+      <output name='qctab' file='Stage1_Quality_Control_Report.txt'/>
+      <output name='qcpng' file='Stage1_Quality_Control_Plot.png' compare='sim_size' delta='16000'/>
+    </test>
+  </tests>
   <help><![CDATA[
 
 .. class:: infomark
