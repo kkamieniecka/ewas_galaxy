@@ -48,6 +48,14 @@
     <data name='beta_out' format='tabular' label='Stage 4 Harmonised Beta Matrix'/>
     <data name='summarytab' format='tabular' label='Stage 4 Probe Retention Summary'/>
   </outputs>
+  <tests>
+    <test>
+      <param name='grset_in' value='Stage3_GRSet.rda' ftype='rdata'/>
+      <output name='grset_out' file='Stage4_GRSet.rda' compare='sim_size'/>
+      <output name='beta_out' file='Stage4_Harmonised_Beta_Matrix.txt'/>
+      <output name='summarytab' file='Stage4_Probe_Retention_Summary.txt'/>
+    </test>
+  </tests>
   <help><![CDATA[
 
 .. class:: infomark

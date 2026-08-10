@@ -70,6 +70,16 @@
     <data name='grset_out' format='rdata' label='Stage 3 GenomicRatioSet (ComBat-corrected)'/>
     <data name='pcapng' format='png' label='Stage 3 PCA Plot (by batch)'/>
   </outputs>
+  <tests>
+    <test>
+      <param name='grset_in' value='Stage2_GRSet.rda' ftype='rdata'/>
+      <param name='phenotype_table' value='phenotypeTable.txt' ftype='tabular'/>
+      <param name='batch_column' value='Treatment'/>
+      <param name='covariate_column' value='none'/>
+      <output name='grset_out' file='Stage3_GRSet.rda' compare='sim_size'/>
+      <output name='pcapng' file='Stage3_PCA_Plot.png' compare='sim_size' delta='16000'/>
+    </test>
+  </tests>
   <help><![CDATA[
 
 .. class:: infomark
