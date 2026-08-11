@@ -1,5 +1,5 @@
 <?xml version='1.0'?>
-<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.3'>
+<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.4'>
   <description>Determines differentially methylated regions and positions from Infinium Methylation Assays</description>
   <macros>
     <import>macros.xml</import>
@@ -8,7 +8,7 @@
     <requirement type='package' version='0.6.0'>bioconductor-illuminahumanmethylation450kanno.ilmn12.hg19</requirement>
   </expand>
   <command detect_errors='exit_code'><![CDATA[
-      #if str($input_source.input_mode) == 'raw_idat'
+      #if str($input_source.input_mode) == 'raw_idat' or str($input_source.input_mode) == 'harmonised_idat'
       #for $counter, $input in enumerate($input_source.files_red):
         #set $redname = str( getattr( $input, 'element_identifier', 'sample' ) ).replace( '/', '-' ).replace( '\t', '-' )
         ln -s $input ./${redname} &&
@@ -54,6 +54,58 @@
         plot.new()
         title('QC skipped: external_grset mode - see harmonisation pipeline QC/PCA outputs')
         dev.off()
+        #elif str($input_source.input_mode) == 'harmonised_idat'
+        ## Cross-array (450K/EPIC) harmonisation, run inline from raw IDATs:
+        ## Noob background correction -> betaqn cross-platform normalisation ->
+        ## ComBat batch correction -> restriction to the 450K/EPIC common probe
+        ## set -> straight into DMR/DMP hunting below. Equivalent to chaining
+        ## the four standalone ewas_harmonisation Stage 1-4 tools followed by
+        ## this tool's external_grset mode, but as a single tool run.
+        require('wateRmelon', quietly = TRUE)
+        require('sva', quietly = TRUE)
+        require('IlluminaHumanMethylation450kmanifest', quietly = TRUE)
+        require('IlluminaHumanMethylationEPICmanifest', quietly = TRUE)
+
+        ## Stage 1: Noob background correction + single dye-bias adjustment.
+        ## Real intensity-based QC is available here (unlike external_grset
+        ## mode, which has no raw MSet to compute it from).
+        RGSet <- read.metharray(list.files(pattern='_Red.idat'))
+        MSet.noob <- preprocessNoob(RGSet, dyeMethod = 'single')
+        qc <- getQC(MSet.noob)
+        write.table(qc, '$qctab')
+        png('$qcpng')
+        plotQC(qc)
+        dev.off()
+        RSet <- ratioConvert(MSet.noob, what = 'both', keepCN = TRUE)
+        GRSet <- mapToGenome(RSet)
+
+        ## Stage 2: Type I/II-aware cross-platform beta quantile normalisation.
+        betas <- getBeta(GRSet)
+        betas.norm <- betaqn(betas)
+        assay(GRSet, 'Beta') <- betas.norm
+
+        ## Stage 3: ComBat empirical Bayes batch correction. Uses the same
+        ## phenotype table as DMP finding below, but read with a header this
+        ## time for named batch/covariate column lookup (the DMP step further
+        ## down reads it positionally instead - two different conventions on
+        ## the same file, not a conflict).
+        pheno_full <- read.table('$phenotype_table', header = TRUE, sep = '\t', check.names = FALSE)
+        batch <- pheno_full[['$input_source.batch_column']]
+        #if str($input_source.covariate_column) != 'none'
+        mod <- model.matrix(~ pheno_full[['$input_source.covariate_column']])
+        #else
+        mod <- model.matrix(~ 1, data = pheno_full)
+        #end if
+        betas.combat <- ComBat(dat = betas.norm, batch = batch, mod = mod, par.prior = TRUE)
+        betas.combat[betas.combat < 0] <- 0.0001 ## ComBat can push values slightly outside [0,1]
+        betas.combat[betas.combat > 1] <- 0.9999
+        assay(GRSet, 'Beta') <- betas.combat
+
+        ## Stage 4: restrict to the 450K/EPIC shared probe set.
+        probes450k <- getManifestInfo(IlluminaHumanMethylation450kmanifest, 'locusNames')
+        probesEPIC <- getManifestInfo(IlluminaHumanMethylationEPICmanifest, 'locusNames')
+        common.probes <- intersect(probes450k, probesEPIC)
+        GRSet <- GRSet[rownames(GRSet) %in% common.probes, ]
         #else
 	RGSet <- read.metharray(list.files(pattern='_Red.idat')) #load .IDAT files
 
@@ -132,8 +184,9 @@
   </configfiles>
   <inputs>
     <conditional name='input_source'>
-      <param name='input_mode' type='select' label='Input data source' help='Choose raw IDATs to run full in-tool preprocessing, or supply an already-harmonised GenomicRatioSet (e.g. from the cross-array 450K/EPIC harmonisation pipeline) to skip preprocessing entirely.'>
+      <param name='input_mode' type='select' label='Input data source' help='Choose raw IDATs to run full in-tool preprocessing, raw IDATs with cross-array harmonisation for mixed 450K/EPIC studies, or supply an already-harmonised GenomicRatioSet to skip preprocessing entirely.'>
         <option value='raw_idat' selected='true'>Raw .IDAT files (run full preprocessing here)</option>
+        <option value='harmonised_idat'>Raw .IDAT files with cross-array harmonisation (Noob + betaqn + ComBat + common-probe, for mixed 450K/EPIC studies)</option>
         <option value='external_grset'>Pre-built GenomicRatioSet (skip preprocessing)</option>
       </param>
       <when value='raw_idat'>
@@ -144,6 +197,24 @@
           <option value='ppfun'>Preprocess Funnorm</option>
           <option value='ppq'>Preprocess Quantile</option>
           <option value='ppsnp'>Remove SNPs</option>
+        </param>
+      </when>
+      <when value='harmonised_idat'>
+        <param type='data' name='files_red' multiple='true' format='idat' label='Red .IDAT files' help='Red .IDAT files extension is followed by the unmethylated signal intensity read in the red channel. Mixed 450K/EPIC samples supported.'/>
+        <param type='data' name='files_grn' multiple='true' format='idat' label='Green .IDAT files' help='Green .IDAT files extension is followed by the methylated signal intensity read in the green channel. Must match Red files 1:1 by sample.'/>
+        <param name='batch_column' type='text' value='cohort' label='Batch Column Name' help='Name of the column in the phenotype table identifying batch/cohort/array-of-origin, passed to ComBat as the batch covariate.'>
+          <sanitizer invalid_char=''>
+            <valid initial='string.ascii_letters,string.digits'>
+              <add value='_'/>
+            </valid>
+          </sanitizer>
+        </param>
+        <param name='covariate_column' type='text' value='none' label='Covariate Column Name (optional)' help='Name of a column to preserve as a biological covariate in the ComBat model (e.g. phenotype/disease status), or "none" to correct for batch only.'>
+          <sanitizer invalid_char=''>
+            <valid initial='string.ascii_letters,string.digits'>
+              <add value='_'/>
+            </valid>
+          </sanitizer>
         </param>
       </when>
       <when value='external_grset'>
@@ -221,6 +292,32 @@
       <output name='dmr' file='Differentially_Methylated_Regions_Harmonised.bed'/>
       <output name='dmp' file='Differentially_Methylated_Positions_Harmonised.bed'/>
     </test>
+    <!-- New behaviour: raw IDATs with cross-array harmonisation run inline
+         (Noob -> betaqn -> ComBat -> common-probe restriction -> DMR/DMP hunting)
+         as a single tool invocation, equivalent to chaining all four standalone
+         ewas_harmonisation stage tools into this tool's external_grset mode. -->
+    <test>
+      <conditional name='input_source'>
+        <param name='input_mode' value='harmonised_idat'/>
+        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat'/>
+        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat'/>
+        <param name='batch_column' value='Treatment'/>
+        <param name='covariate_column' value='none'/>
+      </conditional>
+      <param name='phenotype_table' value='phenotypeTable.txt'/>
+      <param name='maxgap_size' value='250'/>
+      <param name='cutoff_size' value='0.1'/>
+      <param name='number_of_resamples' value='0'/>
+      <param name='null_method' value='permutation'/>
+      <param name='phenotype' value='categorical'/>
+      <param name='q_cutoff' value='1'/>
+      <param name='variance_shrinkage' value='FALSE'/>
+      <param name='ucsc_genome' value='ucsc.gtf'/>
+      <output name='qctab' file='Quality_Control_Report_Harmonised_Inline.txt'/>
+      <output name='qcpng' file='Quality_Control_Plot_Harmonised_Inline.png' compare='sim_size' delta='16000'/>
+      <output name='dmr' file='Differentially_Methylated_Regions_Harmonised_Inline.bed'/>
+      <output name='dmp' file='Differentially_Methylated_Positions_Harmonised_Inline.bed'/>
+    </test>
   </tests>
   <help><![CDATA[
 
@@ -230,11 +327,19 @@
 
 The workflow combines 5 main steps, starting with raw intensity data loading (.idat) and then optional preprocessing and normalisation of the data. The next quality control step performs an additional sample check to remove low-quality data, which normalisation cannot detect. The workflow gives the user the opportunity to perform any of these preparation and data cleaning steps, including the highly recommended genetic variation annotation step resulting in single nucleotide polymorphism identification and removal. Finally, the dataset generated through all of these steps can be used to hunt (find) differentially-methylated positions (DMP)and regions (DMR) with respect to a phenotype covariate.
 
-***Inputs***    
+***Input data source***
 
-*Series of .IDAT files*: matching red and green .idat file for each sample on the chip intensity data.    
+*Raw .IDAT files*: standard single-array-type workflow - loads raw intensity data and runs this tool's own preprocessing (optional Funnorm/Quantile/SNP-removal below).
 
-*(optional) Preprocessing Methods*: by this step probes can be stratified by region via quantile normalisation or by extended implementation of functional normalisation recommended for cases where global changes are expected such as in cancer-normal comparisons. In addition unwanted probes containing either an SNP at the CpG interrogation or at the single nucleotide extension can be removed (recommended).   
+*Raw .IDAT files with cross-array harmonisation*: for studies mixing 450K and EPIC samples. Runs Noob background correction, wateRmelon's Type I/II-aware betaqn cross-platform normalisation, sva's ComBat empirical Bayes batch correction (batch column configurable, e.g. cohort/array-of-origin), and restriction to the 450K/EPIC shared probe set, all inline, before proceeding straight into DMR/DMP hunting below. Equivalent to chaining the four standalone ewas_harmonisation Stage 1-4 tools into this tool's external_grset mode, as a single tool run. Real intensity-based QC is reported (from the Noob step), unlike the pre-built-GenomicRatioSet mode below.
+
+*Pre-built GenomicRatioSet*: skips preprocessing entirely - supply an already-harmonised ``GRSet``/``GRSet.common`` .rda, e.g. produced by running the standalone ewas_harmonisation Stage 1-4 tools separately first.
+
+***Inputs***
+
+*Series of .IDAT files*: matching red and green .idat file for each sample on the chip intensity data.
+
+*(optional) Preprocessing Methods*: by this step probes can be stratified by region via quantile normalisation or by extended implementation of functional normalisation recommended for cases where global changes are expected such as in cancer-normal comparisons. In addition unwanted probes containing either an SNP at the CpG interrogation or at the single nucleotide extension can be removed (recommended). Only applies to the plain Raw .IDAT files mode.
 
 *Phenotype Table*: table of compared samples and their characteristics, may be categorical (e.g. cancer vs. normal) or continuous (e.g. blood pressure).   
 
@@ -267,5 +372,7 @@ sampleID/Accession, phenotype and paird or unpaired samples column
   ]]></help>
   <citations>
     <citation type='doi'>10.18129/B9.bioc.illuminaio</citation>
+    <citation type='doi'>10.1093/bioinformatics/btu049</citation>
+    <citation type='doi'>10.1101/553784</citation>
   </citations>
 </tool>
