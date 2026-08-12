@@ -249,8 +249,13 @@
     <test>
       <conditional name='input_source'>
         <param name='input_mode' value='raw_idat'/>
-        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat'/>
-        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat'/>
+        <!-- location= lets Tool Shed's post-install test verification fetch these
+             large real IDAT fixtures from GitHub instead of requiring them bundled
+             in the shed upload (test-data/ is excluded from shed publishing due to
+             its 282MB total size, see .shed.yml). value= still resolves from the
+             local test-data/ dir for `planemo test` during development. -->
+        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Red.idat'/>
+        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Grn.idat'/>
         <param name='optpp' value='ppsnp'/>
       </conditional>
       <param name='phenotype_table' value='phenotypeTable.txt'/>
@@ -261,18 +266,18 @@
       <param name='phenotype' value='categorical'/>
       <param name='q_cutoff' value='1'/>
       <param name='variance_shrinkage' value='FALSE'/>
-      <param name='ucsc_genome' value='ucsc.gtf'/>
+      <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
       <output name='qctab' file='Quality_Control_Report.txt'/>
       <output name='qcpng' file='Quality_Control_Plot.png' compare='sim_size'/>
-      <output name='table' file='SNPInfo_Table.txt'/>
-      <output name='dmr' file='Differentially_Methylated_Regions.bed'/>
-      <output name='dmp' file='Differentially_Methylated_Positions.bed'/>
+      <output name='table' file='SNPInfo_Table.txt' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/SNPInfo_Table.txt'/>
+      <output name='dmr' file='Differentially_Methylated_Regions.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Regions.bed'/>
+      <output name='dmp' file='Differentially_Methylated_Positions.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Positions.bed'/>
     </test>
     <!-- New behaviour: pre-built GenomicRatioSet from the harmonisation pipeline, preprocessing skipped -->
     <test>
       <conditional name='input_source'>
         <param name='input_mode' value='external_grset'/>
-        <param name='external_grset' value='GRSet_common.rda' ftype='rdata'/>
+        <param name='external_grset' value='GRSet_common.rda' ftype='rdata' location='https://media.githubusercontent.com/media/kkamieniecka/ewas_galaxy/patch/test-data/GRSet_common.rda'/>
       </conditional>
       <param name='phenotype_table' value='phenotypeTable.txt'/>
       <param name='maxgap_size' value='250'/>
@@ -282,15 +287,15 @@
       <param name='phenotype' value='categorical'/>
       <param name='q_cutoff' value='1'/>
       <param name='variance_shrinkage' value='FALSE'/>
-      <param name='ucsc_genome' value='ucsc.gtf'/>
+      <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
       <output name='qctab' file='Quality_Control_Report_Skipped.txt'/>
       <!-- delta bumped from the 10000-byte default: this near-blank placeholder plot is
            small enough that indexed-palette vs. RGBA-truecolor PNG encoding (which varies
            by R graphics-device/libpng build across environments, not by plot content)
            swings the file size by >10000 bytes even though dimensions/content match. -->
       <output name='qcpng' file='Quality_Control_Plot_Skipped.png' compare='sim_size' delta='16000'/>
-      <output name='dmr' file='Differentially_Methylated_Regions_Harmonised.bed'/>
-      <output name='dmp' file='Differentially_Methylated_Positions_Harmonised.bed'/>
+      <output name='dmr' file='Differentially_Methylated_Regions_Harmonised.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Regions_Harmonised.bed'/>
+      <output name='dmp' file='Differentially_Methylated_Positions_Harmonised.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Positions_Harmonised.bed'/>
     </test>
     <!-- New behaviour: raw IDATs with cross-array harmonisation run inline
          (Noob -> betaqn -> ComBat -> common-probe restriction -> DMR/DMP hunting)
@@ -299,8 +304,13 @@
     <test>
       <conditional name='input_source'>
         <param name='input_mode' value='harmonised_idat'/>
-        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat'/>
-        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat'/>
+        <!-- location= lets Tool Shed's post-install test verification fetch these
+             large real IDAT fixtures from GitHub instead of requiring them bundled
+             in the shed upload (test-data/ is excluded from shed publishing due to
+             its 282MB total size, see .shed.yml). value= still resolves from the
+             local test-data/ dir for `planemo test` during development. -->
+        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Red.idat'/>
+        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Grn.idat'/>
         <param name='batch_column' value='Treatment'/>
         <param name='covariate_column' value='none'/>
       </conditional>
@@ -312,11 +322,11 @@
       <param name='phenotype' value='categorical'/>
       <param name='q_cutoff' value='1'/>
       <param name='variance_shrinkage' value='FALSE'/>
-      <param name='ucsc_genome' value='ucsc.gtf'/>
+      <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
       <output name='qctab' file='Quality_Control_Report_Harmonised_Inline.txt'/>
       <output name='qcpng' file='Quality_Control_Plot_Harmonised_Inline.png' compare='sim_size' delta='16000'/>
-      <output name='dmr' file='Differentially_Methylated_Regions_Harmonised_Inline.bed'/>
-      <output name='dmp' file='Differentially_Methylated_Positions_Harmonised_Inline.bed'/>
+      <output name='dmr' file='Differentially_Methylated_Regions_Harmonised_Inline.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Regions_Harmonised_Inline.bed'/>
+      <output name='dmp' file='Differentially_Methylated_Positions_Harmonised_Inline.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Positions_Harmonised_Inline.bed'/>
     </test>
   </tests>
   <help><![CDATA[
