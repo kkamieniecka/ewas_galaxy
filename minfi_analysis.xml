@@ -1,5 +1,5 @@
 <?xml version='1.0'?>
-<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.4'>
+<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.5'>
   <description>Determines differentially methylated regions and positions from Infinium Methylation Assays</description>
   <macros>
     <import>macros.xml</import>
@@ -8,7 +8,7 @@
     <requirement type='package' version='0.6.0'>bioconductor-illuminahumanmethylation450kanno.ilmn12.hg19</requirement>
   </expand>
   <command detect_errors='exit_code'><![CDATA[
-      #if str($input_source.input_mode) == 'raw_idat' or str($input_source.input_mode) == 'harmonised_idat'
+      #if str($input_source.input_mode) == 'raw_idat'
       #for $counter, $input in enumerate($input_source.files_red):
         #set $redname = str( getattr( $input, 'element_identifier', 'sample' ) ).replace( '/', '-' ).replace( '\t', '-' )
         ln -s $input ./${redname} &&
@@ -17,6 +17,33 @@
         #set $grnname = str( getattr( $input, 'element_identifier', 'sample' ) ).replace( '/', '-' ).replace( '\t', '-' )
         ln -s $input ./${grnname} &&
       #end for
+      #elif str($input_source.input_mode) == 'harmonised_idat'
+      ## Platform 1's IDATs go in their own subdirectory (not the flat layout
+      ## raw_idat mode uses) so that, when a Platform 2 batch is also supplied,
+      ## each platform can be passed to a separate minfi::read.metharray() call -
+      ## it can only parse one homogeneous array type per call, so platforms
+      ## must be loaded (and Noob-corrected) separately, then merged via
+      ## combineArrays in the script below.
+      mkdir -p platform1 &&
+      #for $counter, $input in enumerate($input_source.files_red):
+        #set $redname = str( getattr( $input, 'element_identifier', 'sample' ) ).replace( '/', '-' ).replace( '\t', '-' )
+        ln -s $input ./platform1/${redname} &&
+      #end for
+      #for $counter, $input in enumerate($input_source.files_grn):
+        #set $grnname = str( getattr( $input, 'element_identifier', 'sample' ) ).replace( '/', '-' ).replace( '\t', '-' )
+        ln -s $input ./platform1/${grnname} &&
+      #end for
+      #if $input_source.files_red_2
+      mkdir -p platform2 &&
+      #for $counter, $input in enumerate($input_source.files_red_2):
+        #set $redname2 = str( getattr( $input, 'element_identifier', 'sample' ) ).replace( '/', '-' ).replace( '\t', '-' )
+        ln -s $input ./platform2/${redname2} &&
+      #end for
+      #for $counter, $input in enumerate($input_source.files_grn_2):
+        #set $grnname2 = str( getattr( $input, 'element_identifier', 'sample' ) ).replace( '/', '-' ).replace( '\t', '-' )
+        ln -s $input ./platform2/${grnname2} &&
+      #end for
+      #end if
       #end if
       Rscript '$minfi_analysis_script'
       ]]></command>
@@ -66,10 +93,10 @@
         require('IlluminaHumanMethylation450kmanifest', quietly = TRUE)
         require('IlluminaHumanMethylationEPICmanifest', quietly = TRUE)
 
-        ## Stage 1: Noob background correction + single dye-bias adjustment.
-        ## Real intensity-based QC is available here (unlike external_grset
-        ## mode, which has no raw MSet to compute it from).
-        RGSet <- read.metharray(list.files(pattern='_Red.idat'))
+        ## Stage 1 (Platform 1): Noob background correction + single dye-bias
+        ## adjustment. Real intensity-based QC is available here (unlike
+        ## external_grset mode, which has no raw MSet to compute it from).
+        RGSet <- read.metharray(list.files(path='platform1', pattern='_Red.idat', full.names=TRUE))
         MSet.noob <- preprocessNoob(RGSet, dyeMethod = 'single')
         qc <- getQC(MSet.noob)
         write.table(qc, '$qctab')
@@ -78,6 +105,31 @@
         dev.off()
         RSet <- ratioConvert(MSet.noob, what = 'both', keepCN = TRUE)
         GRSet <- mapToGenome(RSet)
+
+        #if $input_source.files_red_2
+        ## Stage 1 (Platform 2) + Combine Arrays: a second platform batch was
+        ## supplied (mixed 450K/EPIC study). read.metharray can only parse one
+        ## homogeneous array type per call - "Trying to parse different IDAT
+        ## files, of different size and type" is what it raises if Platform
+        ## 1 and 2 IDATs are mixed into a single call, so Platform 2 is
+        ## Noob-corrected independently here and merged in via combineArrays,
+        ## which aligns both GenomicRatioSets on their shared genomic ranges
+        ## and cbinds the samples together. The QC report/plot above only
+        ## covers Platform 1; Platform 2's own QC isn't reported separately.
+        RGSet2 <- read.metharray(list.files(path='platform2', pattern='_Red.idat', full.names=TRUE))
+        MSet2.noob <- preprocessNoob(RGSet2, dyeMethod = 'single')
+        RSet2 <- ratioConvert(MSet2.noob, what = 'both', keepCN = TRUE)
+        GRSet2 <- mapToGenome(RSet2)
+        ## combineArrays' internal colData merge hits a real bug ("unable to
+        ## find an inherited method for function 'colData<-' for signature
+        ## GenomicRatioSet, AsIs") when both inputs have completely empty
+        ## colData (0 columns), which is the case here since neither GRSet
+        ## has any pData set. Giving each a real column first avoids the
+        ## degenerate empty-data-frame merge that triggers it.
+        pData(GRSet)\$Platform <- 'platform1'
+        pData(GRSet2)\$Platform <- 'platform2'
+        GRSet <- combineArrays(GRSet, GRSet2)
+        #end if
 
         ## Stage 2: Type I/II-aware cross-platform beta quantile normalisation.
         betas <- getBeta(GRSet)
@@ -200,8 +252,10 @@
         </param>
       </when>
       <when value='harmonised_idat'>
-        <param type='data' name='files_red' multiple='true' format='idat' label='Red .IDAT files' help='Red .IDAT files extension is followed by the unmethylated signal intensity read in the red channel. Mixed 450K/EPIC samples supported.'/>
-        <param type='data' name='files_grn' multiple='true' format='idat' label='Green .IDAT files' help='Green .IDAT files extension is followed by the methylated signal intensity read in the green channel. Must match Red files 1:1 by sample.'/>
+        <param type='data' name='files_red' multiple='true' format='idat' label='Platform 1 Red .IDAT files' help='Red .IDAT files extension is followed by the unmethylated signal intensity read in the red channel. All samples here must be the same array type (e.g. all 450K) - minfi can only parse one array type per batch; use the Platform 2 fields below for a second, different array type (e.g. EPIC).'/>
+        <param type='data' name='files_grn' multiple='true' format='idat' label='Platform 1 Green .IDAT files' help='Green .IDAT files extension is followed by the methylated signal intensity read in the green channel. Must match Platform 1 Red files 1:1 by sample.'/>
+        <param type='data' name='files_red_2' multiple='true' format='idat' optional='true' label='(Optional) Platform 2 Red .IDAT files' help='For mixed-platform studies only (e.g. Platform 1 = 450K, Platform 2 = EPIC). Noob-corrected separately from Platform 1, then merged in via minfi::combineArrays before cross-platform normalisation. Leave empty for single-platform runs.'/>
+        <param type='data' name='files_grn_2' multiple='true' format='idat' optional='true' label='(Optional) Platform 2 Green .IDAT files' help='Must match Platform 2 Red files 1:1 by sample. Leave empty for single-platform runs.'/>
         <param name='batch_column' type='text' value='cohort' label='Batch Column Name' help='Name of the column in the phenotype table identifying batch/cohort/array-of-origin, passed to ComBat as the batch covariate.'>
           <sanitizer invalid_char=''>
             <valid initial='string.ascii_letters,string.digits'>
@@ -328,6 +382,45 @@
       <output name='dmr' file='Differentially_Methylated_Regions_Harmonised_Inline.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Regions_Harmonised_Inline.bed'/>
       <output name='dmp' file='Differentially_Methylated_Positions_Harmonised_Inline.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Positions_Harmonised_Inline.bed'/>
     </test>
+    <!-- New behaviour: two-platform harmonised_idat, exercising the
+         Platform 2 / combineArrays code path. Reuses the same 4 samples for
+         both platforms (no real second-array-type fixture available) - this
+         is a mechanical smoke test of the merge machinery (Noob x2 ->
+         combineArrays -> betaqn -> ComBat -> restrict -> DMR/DMP), not a
+         test of genuine cross-platform correctness. -->
+    <test>
+      <conditional name='input_source'>
+        <param name='input_mode' value='harmonised_idat'/>
+        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Red.idat'/>
+        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Grn.idat'/>
+        <param name='files_red_2' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Red.idat'/>
+        <param name='files_grn_2' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Grn.idat'/>
+        <param name='batch_column' value='Treatment'/>
+        <param name='covariate_column' value='none'/>
+      </conditional>
+      <!-- combineArrays cbinds platform1's 4 samples then platform2's 4
+           samples (both blocks internally sorted alphabetically by
+           read.metharray/list.files), giving 8 columns total. ComBat's
+           batch/mod are read positionally from phenotype_table (no
+           name-based join), so with 8 samples in the merged GRSet the
+           phenotype table must supply 8 rows in that same order - reusing
+           the 4-row phenotypeTable.txt here would leave batch/mod with 4
+           rows against an 8-column beta matrix, which fails ComBat with
+           "non-conformable arguments". -->
+      <param name='phenotype_table' value='phenotypeTable_TwoPlatform.txt'/>
+      <param name='maxgap_size' value='250'/>
+      <param name='cutoff_size' value='0.1'/>
+      <param name='number_of_resamples' value='0'/>
+      <param name='null_method' value='permutation'/>
+      <param name='phenotype' value='categorical'/>
+      <param name='q_cutoff' value='1'/>
+      <param name='variance_shrinkage' value='FALSE'/>
+      <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
+      <output name='qctab' file='Quality_Control_Report_Harmonised_TwoPlatform.txt'/>
+      <output name='qcpng' file='Quality_Control_Plot_Harmonised_TwoPlatform.png' compare='sim_size' delta='16000'/>
+      <output name='dmr' file='Differentially_Methylated_Regions_Harmonised_TwoPlatform.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Regions_Harmonised_TwoPlatform.bed'/>
+      <output name='dmp' file='Differentially_Methylated_Positions_Harmonised_TwoPlatform.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Positions_Harmonised_TwoPlatform.bed'/>
+    </test>
   </tests>
   <help><![CDATA[
 
@@ -342,6 +435,10 @@ The workflow combines 5 main steps, starting with raw intensity data loading (.i
 *Raw .IDAT files*: standard single-array-type workflow - loads raw intensity data and runs this tool's own preprocessing (optional Funnorm/Quantile/SNP-removal below).
 
 *Raw .IDAT files with cross-array harmonisation*: for studies mixing 450K and EPIC samples. Runs Noob background correction, wateRmelon's Type I/II-aware betaqn cross-platform normalisation, sva's ComBat empirical Bayes batch correction (batch column configurable, e.g. cohort/array-of-origin), and restriction to the 450K/EPIC shared probe set, all inline, before proceeding straight into DMR/DMP hunting below. Equivalent to chaining the four standalone ewas_harmonisation Stage 1-4 tools into this tool's external_grset mode, as a single tool run. Real intensity-based QC is reported (from the Noob step), unlike the pre-built-GenomicRatioSet mode below.
+
+If your samples span two genuinely different array types (e.g. some run on 450K, some on EPIC), put one platform's files in the Platform 1 fields and the other's in the optional Platform 2 fields - ``minfi::read.metharray`` can only parse one homogeneous array type per call ("Trying to parse different IDAT files, of different size and type" is the error you'd otherwise see), so each platform is Noob-corrected independently and merged via ``minfi::combineArrays`` before cross-platform normalisation continues. Leave the Platform 2 fields empty for ordinary single-platform runs. The standalone ewas_harmonisation suite has an equivalent standalone **Combine Arrays** tool for the same purpose when chaining Stage 1-4 manually instead of using this inline mode.
+
+When Platform 2 is used, the Phenotype Table must have one row per sample across *both* platforms, ordered Platform 1's samples first then Platform 2's (each block alphabetically by filename, matching how ``read.metharray`` orders columns) - the batch/covariate columns are read positionally, not joined by sample name, so a phenotype table sized for one platform only will make ComBat fail with a "non-conformable arguments" error once the two platforms are merged.
 
 *Pre-built GenomicRatioSet*: skips preprocessing entirely - supply an already-harmonised ``GRSet``/``GRSet.common`` .rda, e.g. produced by running the standalone ewas_harmonisation Stage 1-4 tools separately first.
 
