@@ -1,5 +1,5 @@
 <?xml version='1.0'?>
-<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.5'>
+<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.6'>
   <description>Determines differentially methylated regions and positions from Infinium Methylation Assays</description>
   <macros>
     <import>macros.xml</import>
@@ -143,6 +143,19 @@
         ## the same file, not a conflict).
         pheno_full <- read.table('$phenotype_table', header = TRUE, sep = '\t', check.names = FALSE)
         batch <- pheno_full[['$input_source.batch_column']]
+        ## ComBat builds its own internal batch design matrix and fails deep
+        ## inside model.matrix.default/contrasts<- with a cryptic "contrasts
+        ## can be applied only to factors with 2 or more levels" if the batch
+        ## column isn't found or every sample shares the same value - check
+        ## for both up front so the real problem (Batch Column Name param vs.
+        ## Phenotype Table contents) is obvious instead of a stack trace
+        ## pointing into ComBat's internals.
+        if (is.null(batch)) {
+          stop(sprintf("Batch Column Name '%s' was not found in the phenotype table's header (columns present: %s). Check the Batch Column Name parameter matches a column in your Phenotype Table exactly.", '$input_source.batch_column', paste(colnames(pheno_full), collapse = ', ')))
+        }
+        if (length(unique(batch)) < 2) {
+          stop(sprintf("Batch Column Name '%s' has only one distinct value (%s) across all samples in the phenotype table. ComBat batch correction requires at least 2 batches/cohorts to correct between - if all your samples come from the same batch, set Batch Column Name to a column that actually varies (e.g. array/cohort/processing-date), or use the plain 'Raw .IDAT files' input mode instead, which skips ComBat entirely.", '$input_source.batch_column', unique(batch)[1]))
+        }
         #if str($input_source.covariate_column) != 'none'
         mod <- model.matrix(~ pheno_full[['$input_source.covariate_column']])
         #else
@@ -420,6 +433,32 @@
       <output name='qcpng' file='Quality_Control_Plot_Harmonised_TwoPlatform.png' compare='sim_size' delta='16000'/>
       <output name='dmr' file='Differentially_Methylated_Regions_Harmonised_TwoPlatform.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Regions_Harmonised_TwoPlatform.bed'/>
       <output name='dmp' file='Differentially_Methylated_Positions_Harmonised_TwoPlatform.bed' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/Differentially_Methylated_Positions_Harmonised_TwoPlatform.bed'/>
+    </test>
+    <!-- Error-path test: an invalid Batch Column Name should fail with our
+         own explicit stop() message (naming the missing column and listing
+         what IS in the phenotype table), not a stack trace pointing into
+         ComBat's internals ("contrasts can be applied only to factors with
+         2 or more levels" - the error a real user hit and reported). -->
+    <test expect_failure='true'>
+      <conditional name='input_source'>
+        <param name='input_mode' value='harmonised_idat'/>
+        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Red.idat'/>
+        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Grn.idat'/>
+        <param name='batch_column' value='NoSuchColumn'/>
+        <param name='covariate_column' value='none'/>
+      </conditional>
+      <param name='phenotype_table' value='phenotypeTable.txt'/>
+      <param name='maxgap_size' value='250'/>
+      <param name='cutoff_size' value='0.1'/>
+      <param name='number_of_resamples' value='0'/>
+      <param name='null_method' value='permutation'/>
+      <param name='phenotype' value='categorical'/>
+      <param name='q_cutoff' value='1'/>
+      <param name='variance_shrinkage' value='FALSE'/>
+      <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
+      <assert_stderr>
+        <has_text text="was not found in the phenotype table's header"/>
+      </assert_stderr>
     </test>
   </tests>
   <help><![CDATA[
