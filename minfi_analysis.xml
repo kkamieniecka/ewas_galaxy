@@ -1,5 +1,5 @@
 <?xml version='1.0'?>
-<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.7'>
+<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.8'>
   <description>Determines differentially methylated regions and positions from Infinium Methylation Assays</description>
   <macros>
     <import>macros.xml</import>
@@ -153,6 +153,15 @@
         if (is.null(batch)) {
           stop(sprintf("Batch Column Name '%s' was not found in the phenotype table's header (columns present: %s). Check the Batch Column Name parameter matches a column in your Phenotype Table exactly.", '$input_source.batch_column', paste(colnames(pheno_full), collapse = ', ')))
         }
+        ## ComBat internally does as.factor(batch), which silently drops NA
+        ## rather than counting it as a level - so a batch column with blank
+        ## cells can pass a plain unique(batch) < 2 check (NA counts as a
+        ## distinct value there) and still collapse to a single real level
+        ## once inside ComBat, hitting the exact same contrasts<- crash one
+        ## step later. Check for NA explicitly, before the level count.
+        if (any(is.na(batch))) {
+          stop(sprintf("Batch Column Name '%s' has a missing (blank) value for %d of %d samples in the phenotype table. Every sample needs a non-missing batch value for ComBat to run - fill in the blank cell(s) in that column.", '$input_source.batch_column', sum(is.na(batch)), length(batch)))
+        }
         if (length(unique(batch)) < 2) {
           stop(sprintf("Batch Column Name '%s' has only one distinct value (%s) across all samples in the phenotype table. ComBat batch correction requires at least 2 batches/cohorts to correct between - if all your samples come from the same batch, set Batch Column Name to a column that actually varies (e.g. array/cohort/processing-date), or use the plain 'Raw .IDAT files' input mode instead, which skips ComBat entirely.", '$input_source.batch_column', unique(batch)[1]))
         }
@@ -160,9 +169,12 @@
         covariate <- pheno_full[['$input_source.covariate_column']]
         ## Same contrasts<- failure mode as the batch column above, but here
         ## it comes straight from this model.matrix() call rather than from
-        ## inside ComBat - same fix, checked explicitly up front.
+        ## inside ComBat - same fixes, checked explicitly up front.
         if (is.null(covariate)) {
           stop(sprintf("Covariate Column Name '%s' was not found in the phenotype table's header (columns present: %s). Check the Covariate Column Name parameter matches a column in your Phenotype Table exactly, or set it to 'none' to correct for batch only.", '$input_source.covariate_column', paste(colnames(pheno_full), collapse = ', ')))
+        }
+        if (any(is.na(covariate))) {
+          stop(sprintf("Covariate Column Name '%s' has a missing (blank) value for %d of %d samples in the phenotype table. Every sample needs a non-missing covariate value - fill in the blank cell(s), or set Covariate Column Name to 'none' to correct for batch only.", '$input_source.covariate_column', sum(is.na(covariate)), length(covariate)))
         }
         if (length(unique(covariate)) < 2) {
           stop(sprintf("Covariate Column Name '%s' has only one distinct value (%s) across all samples in the phenotype table. A covariate needs at least 2 distinct values to be modelled - either set Covariate Column Name to a column that actually varies, or set it to 'none' to correct for batch only.", '$input_source.covariate_column', unique(covariate)[1]))
@@ -493,6 +505,35 @@
       <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
       <assert_stderr>
         <has_text text="Covariate Column Name 'NoSuchCovariate' was not found"/>
+      </assert_stderr>
+    </test>
+    <!-- A user hit the contrasts<- crash a third time even with a valid,
+         multi-value Batch Column Name: one sample's batch cell held the
+         literal text "NA", which read.table() parses as a true R NA. A
+         plain unique(batch) count treats NA as its own distinct value and
+         doesn't catch this, but ComBat's internal as.factor(batch) drops
+         NA rows entirely, silently collapsing back to a single real level
+         and crashing exactly as before. This phenotype table reproduces
+         that: 3 samples share one batch value, the 4th is "NA". -->
+    <test expect_failure='true'>
+      <conditional name='input_source'>
+        <param name='input_mode' value='harmonised_idat'/>
+        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Red.idat'/>
+        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Grn.idat'/>
+        <param name='batch_column' value='Treatment'/>
+        <param name='covariate_column' value='none'/>
+      </conditional>
+      <param name='phenotype_table' value='phenotypeTable_MissingBatch.txt'/>
+      <param name='maxgap_size' value='250'/>
+      <param name='cutoff_size' value='0.1'/>
+      <param name='number_of_resamples' value='0'/>
+      <param name='null_method' value='permutation'/>
+      <param name='phenotype' value='categorical'/>
+      <param name='q_cutoff' value='1'/>
+      <param name='variance_shrinkage' value='FALSE'/>
+      <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
+      <assert_stderr>
+        <has_text text="has a missing (blank) value for 1 of 4 samples"/>
       </assert_stderr>
     </test>
   </tests>
