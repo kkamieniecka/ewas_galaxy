@@ -1,5 +1,5 @@
 <?xml version='1.0'?>
-<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.8'>
+<tool id='minfi_analysis' name='Infinium Human Methylation BeadChip' version='2.1.9'>
   <description>Determines differentially methylated regions and positions from Infinium Methylation Assays</description>
   <macros>
     <import>macros.xml</import>
@@ -142,6 +142,16 @@
         ## down reads it positionally instead - two different conventions on
         ## the same file, not a conflict).
         pheno_full <- read.table('$phenotype_table', header = TRUE, sep = '\t', check.names = FALSE)
+        ## ComBat's batch/mod are read positionally from the phenotype table -
+        ## there's no join by sample name anywhere in this pipeline - so a
+        ## row count that doesn't match the number of samples in betas.norm
+        ## (all Platform 1 samples, plus Platform 2's if used) crashes deep
+        ## inside ComBat's design-matrix math with a bare "non-conformable
+        ## arguments", which doesn't say anything about the phenotype table
+        ## at all. Check the row count explicitly, before anything else here.
+        if (nrow(pheno_full) != ncol(betas.norm)) {
+          stop(sprintf("Phenotype Table has %d row(s) but there are %d sample(s) in your data (Platform 1 IDATs, plus Platform 2's if used). Phenotype Table needs exactly one row per sample, in the same order minfi loads your files (alphabetical by filename; Platform 1 samples first, then Platform 2's).", nrow(pheno_full), ncol(betas.norm)))
+        }
         batch <- pheno_full[['$input_source.batch_column']]
         ## ComBat builds its own internal batch design matrix and fails deep
         ## inside model.matrix.default/contrasts<- with a cryptic "contrasts
@@ -225,9 +235,42 @@
         #end if
 
 	pheno <- read.table('$phenotype_table',skip = 1)
+        ## Phenotype Table's 2nd column (V2) is read positionally here and
+        ## again below for dmpFinder - no join by sample name anywhere in
+        ## this pipeline, same as the ComBat batch/covariate columns above.
+        ## A row count mismatch doesn't fail here (model.matrix silently
+        ## recycles/mismatches), but produces bogus results silently or
+        ## crashes later downstream with a message that says nothing about
+        ## the phenotype table - check explicitly, for every input mode.
+        if (nrow(pheno) != ncol(GRSet)) {
+          stop(sprintf("Phenotype Table has %d row(s) but there are %d sample(s) in your data. Phenotype Table needs exactly one row per sample, in the same order minfi loads your files (alphabetical by filename; Platform 1 samples first, then Platform 2's, if used).", nrow(pheno), ncol(GRSet)))
+        }
         group <- pheno\$V2
         pair <- factor(pheno\$V3)
-	
+        #if str($phenotype) == 'categorical'
+        ## dmpFinder's categorical branch (further down) fits a per-group
+        ## mean and computes an F-test per probe from the residual sum of
+        ## squares; if every sample has its own distinct Phenotype Table
+        ## value, there's no within-group replication left, every probe's
+        ## residual df collapses to 0, and every p-value comes out NaN. With
+        ## zero valid p-values left, dmpFinder's internal pi0.est() takes the
+        ## mean of an empty vector (NaN) for every lambda cutoff and hands
+        ## smooth.spline() an all-NaN input, which is the "missing or
+        ## infinite values in inputs are not allowed" crash a user hit -
+        ## nothing in that message points at the phenotype table either.
+        ## bumphunter (right below) tolerates the same degenerate design via
+        ## limma's rank-safe lmFit, so it can succeed even when this will
+        ## fail - check the real requirement (>=2 groups, not one row per
+        ## group) explicitly, before either step runs.
+        group.levels <- unique(as.character(group))
+        if (length(group.levels) < 2) {
+          stop(sprintf("Phenotype Table's 2nd column has only one distinct value (%s) across all samples. With Phenotype Type set to categorical, dmpFinder needs at least 2 groups to compare - check the 2nd column of your Phenotype Table, or switch Phenotype Type to continuous if it's a numeric measurement instead.", group.levels[1]))
+        }
+        if (length(group.levels) >= length(group)) {
+          stop("Phenotype Table's 2nd column has a different value for every single sample (as many groups as samples). With Phenotype Type set to categorical, dmpFinder needs replication within each group - every group having exactly one sample leaves no residual degrees of freedom, and every p-value comes out undefined. Check that the 2nd column of your Phenotype Table is a category label (e.g. case/control) shared by multiple samples, not a per-sample identifier.")
+        }
+        #end if
+
 	design.matrix <- model.matrix(~ group + pair)
 	
 	maxGap <- as.numeric('$maxgap_size')
@@ -255,7 +298,7 @@
         tab <- tab[,c(1,4,5,10)]
         colnames(tab) <- c('chr','start','end','names')
 
-        dmp <- dmpFinder(dat = getBeta(GRSet),pheno =  read.table('$phenotype_table',skip=1)[,'V2'], type = '$phenotype', qCutoff = as.numeric('$q_cutoff'), shrinkVar = '$variance_shrinkage')
+        dmp <- dmpFinder(dat = getBeta(GRSet),pheno = group, type = '$phenotype', qCutoff = as.numeric('$q_cutoff'), shrinkVar = '$variance_shrinkage')
         dmp[,'names'] <- rownames(dmp)
         data <- merge(dmp, tab, by='names',sort = TRUE)
         data <- data[,c(6,7,8,1,4,5)]
@@ -534,6 +577,64 @@
       <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
       <assert_stderr>
         <has_text text="has a missing (blank) value for 1 of 4 samples"/>
+      </assert_stderr>
+    </test>
+    <!-- A user hit a bare "non-conformable arguments" from deep inside
+         ComBat's design-matrix math (Calls: ComBat -> solve -> solve.default
+         -> tcrossprod) after supplying a phenotype table with a different
+         row count than their actual sample count - nothing in that message
+         points at the phenotype table at all. batch/mod are read
+         positionally with no join by sample name anywhere in this pipeline,
+         so row count must match sample count exactly. This phenotype table
+         has 3 rows against the 4-sample fixture set used below. -->
+    <test expect_failure='true'>
+      <conditional name='input_source'>
+        <param name='input_mode' value='harmonised_idat'/>
+        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Red.idat'/>
+        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Grn.idat'/>
+        <param name='batch_column' value='Treatment'/>
+        <param name='covariate_column' value='none'/>
+      </conditional>
+      <param name='phenotype_table' value='phenotypeTable_WrongRowCount.txt'/>
+      <param name='maxgap_size' value='250'/>
+      <param name='cutoff_size' value='0.1'/>
+      <param name='number_of_resamples' value='0'/>
+      <param name='null_method' value='permutation'/>
+      <param name='phenotype' value='categorical'/>
+      <param name='q_cutoff' value='1'/>
+      <param name='variance_shrinkage' value='FALSE'/>
+      <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
+      <assert_stderr>
+        <has_text text="Phenotype Table has 3 row(s) but there are 4 sample(s)"/>
+      </assert_stderr>
+    </test>
+    <!-- A user hit "missing or infinite values in inputs are not allowed"
+         from deep inside dmpFinder's internal pi0.est/smooth.spline (after
+         bumphunter had already succeeded) - their Phenotype Table's 2nd
+         column had a different value for every sample, leaving no
+         within-group replication for dmpFinder's categorical F-test, so
+         every probe's p-value came out NaN and pi0.est was left averaging
+         an empty vector. This phenotype table reproduces that: 4 samples,
+         4 distinct "Sensitivity" values (used positionally as V2). Uses
+         raw_idat mode since this check applies before ComBat even runs. -->
+    <test expect_failure='true'>
+      <conditional name='input_source'>
+        <param name='input_mode' value='raw_idat'/>
+        <param name='files_red' value='GSM1588707_8795207119_R06C02_Red.idat,GSM1588706_8795207135_R02C02_Red.idat,GSM1588705_8795207119_R05C02_Red.idat,GSM1588704_8795207135_R01C02_Red.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Red.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Red.idat'/>
+        <param name='files_grn' value='GSM1588707_8795207119_R06C02_Grn.idat,GSM1588706_8795207135_R02C02_Grn.idat,GSM1588705_8795207119_R05C02_Grn.idat,GSM1588704_8795207135_R01C02_Grn.idat' ftype='idat' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588707_8795207119_R06C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588706_8795207135_R02C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588705_8795207119_R05C02_Grn.idat,https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/GSM1588704_8795207135_R01C02_Grn.idat'/>
+        <param name='optpp' value='ppsnp'/>
+      </conditional>
+      <param name='phenotype_table' value='phenotypeTable_AllUniqueGroups.txt'/>
+      <param name='maxgap_size' value='250'/>
+      <param name='cutoff_size' value='0.1'/>
+      <param name='number_of_resamples' value='0'/>
+      <param name='null_method' value='permutation'/>
+      <param name='phenotype' value='categorical'/>
+      <param name='q_cutoff' value='1'/>
+      <param name='variance_shrinkage' value='FALSE'/>
+      <param name='ucsc_genome' value='ucsc.gtf' location='https://raw.githubusercontent.com/kkamieniecka/ewas_galaxy/patch/test-data/ucsc.gtf'/>
+      <assert_stderr>
+        <has_text text="as many groups as samples"/>
       </assert_stderr>
     </test>
   </tests>
